@@ -1,0 +1,14 @@
+/dist/
+__pycache__/
+*.py[cod]
+.venv/
+*.tmp
+*.bak
+*~
+.~lock.*
+.env
+/local/
+/private/
+*.log
+*.odt
+!tests/fixtures/*.odt

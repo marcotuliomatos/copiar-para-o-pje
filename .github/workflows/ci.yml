@@ -1,0 +1,13 @@
+name: Validação estática
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testes estáticos
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Empacotar OXT
+        run: python3 scripts/build.py

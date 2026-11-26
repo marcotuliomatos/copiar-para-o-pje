@@ -1,0 +1,1286 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
+<script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">Option Explicit
+Global PjeTransfer As Object
+Global PjeBytes As Variant
+Global PjePlain As String
+Global PjePlainBytes As Variant
+Global PjeFailure As String
+Global PjeImages As Long
+Global PjeStage As String
+Global PjeDoc As Object
+Global PjeHier As Boolean
+
+Sub CopiarParaPJe
+ On Error GoTo Falha
+ Dim doc As Object, result As Variant, out As Object, writer As Object, clip As Object
+ doc=ThisComponent
+ If Not doc.supportsService("com.sun.star.text.TextDocument") Then Exit Sub
+ result=Converter(doc)
+ If PjeFailure&lt;&gt;"" Then
+  MsgBox PjeFailure,16,"Copiar para o PJe"
+  Exit Sub
+ End If
+ out=CreateUnoService("com.sun.star.io.SequenceOutputStream")
+ writer=CreateUnoService("com.sun.star.io.TextOutputStream")
+ writer.setOutputStream(out)
+ writer.setEncoding("UTF-8")
+ writer.writeString("&lt;html&gt;&lt;head&gt;&lt;meta charset=""utf-8""&gt;&lt;/head&gt;&lt;body&gt;" &amp; result(0) &amp; "&lt;/body&gt;&lt;/html&gt;")
+ writer.flush()
+ PjeBytes=out.getWrittenBytes()
+ PjePlain=result(1)
+ out=CreateUnoService("com.sun.star.io.SequenceOutputStream")
+ writer=CreateUnoService("com.sun.star.io.TextOutputStream")
+ writer.setOutputStream(out)
+ writer.setEncoding("UTF-8")
+ writer.writeString(PjePlain)
+ writer.flush()
+ PjePlainBytes=out.getWrittenBytes()
+ PjeTransfer=CreateUnoListener("PJE_", "com.sun.star.datatransfer.XTransferable")
+ clip=CreateUnoService("com.sun.star.datatransfer.clipboard.SystemClipboard")
+ clip.setContents(PjeTransfer,Nothing)
+ Exit Sub
+Falha:
+ MsgBox "A cópia não foi concluída: " &amp; Error$,16,"Copiar para o PJe"
+End Sub
+
+Function Escapar(s As String) As String
+ s=Replace(s,"&amp;","&amp;amp;")
+ s=Replace(s,"&lt;","&amp;lt;")
+ s=Replace(s,"&gt;","&amp;gt;")
+ s=Replace(s,Chr(9),"&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;")
+ s=Replace(s,Chr(10),"&lt;br&gt;")
+ s=Replace(s,"  ","&amp;nbsp; ")
+ Escapar=s
+End Function
+
+Function Atributo(s As String) As String
+ Atributo=Replace(Escapar(s),Chr(34),"&amp;quot;")
+End Function
+Function Estilo(s As String) As String
+ If s&lt;&gt;"" Then Estilo=" style=""" &amp; Atributo(Trim(s)) &amp; """"
+End Function
+Function Cor(n As Long) As String
+ Cor="#" &amp; LCase(Right("000000" &amp; Hex(n And 16777215),6))
+End Function
+Function Numero(n As Double) As String
+ Numero=Replace(Trim(Str((Sgn(n)*Int(Abs(n)*1000+0.5)/1000))),",",".")
+End Function
+Function Pixels(n As Double) As String
+ Pixels=Numero(n*96/2540) &amp; "px"
+End Function
+Function Tem(o As Object, nome As String) As Boolean
+ On Error GoTo Ausente
+ Tem=o.getPropertySetInfo().hasPropertyByName(nome)
+Ausente:
+End Function
+Function CssTexto(s As String) As String
+ Dim i As Long,k As Long,ch As String,out As String
+ For i=1 To Len(s)
+  ch=Mid(s,i,1):k=Asc(ch)
+  If ch=Chr(34) Or ch=Chr(92) Or ch="&lt;" Or ch="&gt;" Or k&lt;32 Then
+   out=out &amp; Chr(92) &amp; Hex(k And 65535) &amp; " "
+  Else
+   out=out &amp; ch
+  End If
+ Next i
+ CssTexto=Chr(34) &amp; out &amp; Chr(34)
+End Function
+Function Fonte(o As Object, Optional semTamanho As Variant) As String
+ Dim css As String, families As Variant, f As Variant, names As String, fallback As String
+ If Tem(o,"CharFontName") Then
+  families=Split(Replace(o.CharFontName,";",","),",")
+  For Each f In families
+   If Trim(f)&lt;&gt;"" Then
+    If names&lt;&gt;"" Then names=names &amp; ", "
+    names=names &amp; CssTexto(Trim(f))
+   End If
+  Next f
+  Select Case o.CharFontFamily
+   Case 1:fallback="fantasy"
+   Case 2:fallback="monospace"
+   Case 3:fallback="serif"
+   Case 4:fallback="cursive"
+   Case 5:fallback="sans-serif"
+  End Select
+  If fallback&lt;&gt;"" Then
+   If names&lt;&gt;"" Then names=names &amp; ", "
+   names=names &amp; fallback
+  End If
+  If names&lt;&gt;"" Then css="font-family: " &amp; names &amp; "; "
+ End If
+ If IsMissing(semTamanho) Then semTamanho=False
+ If Not semTamanho Then
+  If Tem(o,"CharHeight") Then
+   If o.CharHeight&gt;0 Then css=css &amp; "font-size: " &amp; Numero(o.CharHeight) &amp; "pt; "
+  End If
+ End If
+ Fonte=css
+End Function
+Function Decoracao(n As Long, linha As String, corLinha As String) As String
+ Dim tipo As String, grossa As Boolean
+ tipo="solid"
+ Select Case n
+  Case 2:tipo="double"
+  Case 3,13:tipo="dotted"
+  Case 5,6,7,8,14,15,16,17:tipo="dashed"
+  Case 9,10,11,18:tipo="wavy"
+ End Select
+ grossa=(n&gt;=12 And n&lt;=18)
+ Decoracao="text-decoration-line: " &amp; linha &amp; "; text-decoration-style: " &amp; tipo &amp; "; " &amp; corLinha
+ If grossa Then Decoracao=Decoracao &amp; "text-decoration-thickness: 2px; "
+End Function
+Function Trecho(q As Object, Optional trechoTexto As Variant, Optional semTamanho As Variant) As String
+ Dim s As String, css As String, url As String, esc As Long, escHeight As Long, escCSS As String
+ If IsMissing(trechoTexto) Then trechoTexto=q.String
+ If IsMissing(semTamanho) Then semTamanho=False
+ s=Escapar(trechoTexto): css=Fonte(q,semTamanho)
+ If q.CharKerning&lt;&gt;0 Then css=css &amp; "letter-spacing: " &amp; Numero(q.CharKerning*72/2540) &amp; "pt; "
+ Select Case q.CharCaseMap
+  Case 1:css=css &amp; "text-transform: uppercase; "
+  Case 2:css=css &amp; "text-transform: lowercase; "
+  Case 3:css=css &amp; "text-transform: capitalize; "
+  Case 4:css=css &amp; "font-variant: small-caps; "
+ End Select
+ If q.CharShadowed Then css=css &amp; "text-shadow: 1px 1px 1px #808080; "
+ If q.CharContoured Then css=css &amp; "-webkit-text-stroke: 0.6px currentColor; -webkit-text-fill-color: transparent; "
+ If q.CharRotation&lt;&gt;0 Then css=css &amp; "display: inline-block; transform: rotate(" &amp; Numero(-q.CharRotation/10) &amp; "deg); transform-origin: center; "
+ If q.CharColor&gt;=0 Then
+  If q.CharColor&lt;&gt;0 Or q.getPropertyState("CharColor")=com.sun.star.beans.PropertyState.DIRECT_VALUE Then css=css &amp; "color: " &amp; Cor(q.CharColor) &amp; "; "
+ End If
+ If q.CharBackColor&gt;=0 And Not q.CharBackTransparent Then
+  css=css &amp; "background-color: " &amp; Cor(q.CharBackColor) &amp; "; "
+ ElseIf Tem(q,"CharHighlight") Then
+  If q.CharHighlight&gt;=0 Then css=css &amp; "background-color: " &amp; Cor(q.CharHighlight) &amp; "; "
+ End If
+ If q.CharPosture=1 Or q.CharPosture=2 Then s="&lt;em&gt;" &amp; s &amp; "&lt;/em&gt;"
+ If q.CharWeight&gt;=150 Then s="&lt;strong&gt;" &amp; s &amp; "&lt;/strong&gt;"
+ Dim ucss As String, scss As String, lineColor As String
+ If q.CharUnderline&lt;&gt;0 Then
+  lineColor=""
+  If q.CharUnderlineHasColor And q.CharUnderlineColor&gt;=0 Then lineColor="text-decoration-color: " &amp; Cor(q.CharUnderlineColor) &amp; "; "
+  If q.CharUnderline&lt;&gt;1 Or lineColor&lt;&gt;"" Then ucss=Decoracao(q.CharUnderline,"underline",lineColor)
+  s="&lt;u" &amp; Estilo(ucss) &amp; "&gt;" &amp; s &amp; "&lt;/u&gt;"
+ End If
+ If q.CharStrikeout&lt;&gt;0 Then
+  If q.CharStrikeout=2 Then scss="text-decoration-line: line-through; text-decoration-style: double; "
+  If q.CharStrikeout=4 Then scss="text-decoration-line: line-through; text-decoration-thickness: 2px; "
+  s="&lt;s" &amp; Estilo(scss) &amp; "&gt;" &amp; s &amp; "&lt;/s&gt;"
+ End If
+ esc=q.CharEscapement
+ If esc&lt;&gt;0 Then
+  escHeight=q.CharEscapementHeight
+  escCSS=""
+  If escHeight&gt;0 Then
+   escCSS="font-size: " &amp; Numero(escHeight) &amp; "%; "
+   ' Explicit UNO baseline shifts are percentages of the original font size.
+   ' CSS em is relative to the scaled font. +/-101 means automatic positioning.
+   If Abs(esc)&lt;=100 Then escCSS=escCSS &amp; "vertical-align: " &amp; Numero(esc/escHeight) &amp; "em; "
+  End If
+  If esc&gt;0 Then s="&lt;sup" &amp; Estilo(escCSS) &amp; "&gt;" &amp; s &amp; "&lt;/sup&gt;"
+  If esc&lt;0 Then s="&lt;sub" &amp; Estilo(escCSS) &amp; "&gt;" &amp; s &amp; "&lt;/sub&gt;"
+ End If
+ If css&lt;&gt;"" Then s="&lt;span" &amp; Estilo(css) &amp; "&gt;" &amp; s &amp; "&lt;/span&gt;"
+ url=q.HyperLinkURL
+ If url&lt;&gt;"" Then
+  If LCase(Left(url,11))="javascript:" Or LCase(Left(url,5))="data:" Or LCase(Left(url,5))="file:" Then
+   PjeFailure="Hyperlink local ou inseguro não suportado. Cópia cancelada.": Exit Function
+  End If
+  s="&lt;a href=""" &amp; Atributo(url) &amp; """ target=""_blank"" rel=""noopener noreferrer""&gt;" &amp; s &amp; "&lt;/a&gt;"
+ End If
+ Trecho=s
+End Function
+Function Base64Bytes(b As Variant) As String
+ Dim abc As String, s As String, i As Long, n As Long, a As Long, c As Long, d As Long, v As Long, pos As Long
+ abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+ n=UBound(b)+1
+ s=Space(4*Int((n+2)/3)):pos=1
+ For i=0 To n-1 Step 3
+  a=b(i) And 255:c=0:d=0
+  If i+1&lt;n Then c=b(i+1) And 255
+  If i+2&lt;n Then d=b(i+2) And 255
+  v=a*65536+c*256+d
+  Mid(s,pos,1)=Mid(abc,Int(v/262144)+1,1)
+  Mid(s,pos+1,1)=Mid(abc,(Int(v/4096) And 63)+1,1)
+  If i+1&lt;n Then
+   Mid(s,pos+2,1)=Mid(abc,(Int(v/64) And 63)+1,1)
+  Else
+   Mid(s,pos+2,1)="="
+  End If
+  If i+2&lt;n Then
+   Mid(s,pos+3,1)=Mid(abc,(v And 63)+1,1)
+  Else
+   Mid(s,pos+3,1)="="
+  End If
+  pos=pos+4
+ Next i
+ Base64Bytes=s
+End Function
+Function Imagem(q As Object) As String
+ On Error GoTo FalhaFrame
+ Dim en As Object,g As Object
+ en=q.createContentEnumeration("com.sun.star.text.TextContent")
+ If Not en.hasMoreElements() Then GoTo FalhaFrame
+ g=en.nextElement()
+ If Not g.supportsService("com.sun.star.text.TextGraphicObject") Then GoTo FalhaFrame
+ If en.hasMoreElements() Then GoTo FalhaFrame
+ Imagem=ImagemObjeto(g)
+ Exit Function
+FalhaFrame:
+ PjeFailure="Não foi possível converter o objeto gráfico ancorado no texto. Cópia cancelada."
+End Function
+Function ImagemObjeto(g As Object) As String
+ On Error GoTo FalhaImagem
+ Dim gp As Object,tmp As Object,fs As Object,inp As Object,n As Long,u As String,src As String,st As String,stage As String
+ Dim args(1) As New com.sun.star.beans.PropertyValue
+ Dim bytes() As Byte
+ Dim got As Long
+ Dim crop As Variant,natural As Variant,iw As Double,ih As Double,cw As Double,ch As Double,x As Double,y As Double,angle As Double,outer As String,anchor As String,wrap As String,tag As String,attrs As String,rot As String
+ stage="verificar imagem"
+ If g.Graphic.GraphicType=0 Then GoTo FalhaImagem
+ stage="criar temporario":tmp=CreateUnoService("com.sun.star.io.TempFile")
+ tmp.RemoveFile=True:u=tmp.Uri
+ tmp.closeOutput()
+ gp=CreateUnoService("com.sun.star.graphic.GraphicProvider")
+ args(0).Name="URL":args(0).Value=u
+ args(1).Name="MimeType":args(1).Value="image/png"
+ stage="exportar PNG":gp.storeGraphic(g.Graphic,args())
+ fs=CreateUnoService("com.sun.star.ucb.SimpleFileAccess")
+ stage="ler tamanho":n=fs.getSize(u)
+ If n&lt;=0 Or n&gt;20000000 Then GoTo FalhaImagem
+ stage="abrir PNG":inp=fs.openFileRead(u)
+ stage="ler bytes":got=inp.readBytes(bytes(),n)
+ If got&lt;&gt;n Then GoTo FalhaImagem
+ inp.closeInput()
+ stage="base64":src="data:image/png;base64," &amp; Base64Bytes(bytes())
+ stage="atributos"
+ If g.Width&lt;=0 Or g.Height&lt;=0 Then GoTo FalhaImagem
+ iw=g.Width:ih=g.Height:outer="":attrs="":rot=""
+ anchor="":wrap=""
+ If g.AnchorType=com.sun.star.text.TextContentAnchorType.AS_CHARACTER Then anchor="AS_CHARACTER"
+ If g.AnchorType=com.sun.star.text.TextContentAnchorType.AT_PAGE Then anchor="AT_PAGE"
+ If g.Surround=com.sun.star.text.WrapTextMode.NONE Then wrap="NONE"
+ If g.Surround=com.sun.star.text.WrapTextMode.THROUGH Then wrap="THROUGH"
+ If anchor="AT_PAGE" Then
+  PjeFailure="Imagem ancorada à página: use ancoragem ao parágrafo ou ao caractere para copiar com segurança.": Exit Function
+ End If
+ outer="margin: " &amp; Pixels(g.TopMargin) &amp; " " &amp; Pixels(g.RightMargin) &amp; " " &amp; Pixels(g.BottomMargin) &amp; " " &amp; Pixels(g.LeftMargin) &amp; "; "
+ If anchor="AS_CHARACTER" Then
+  Select Case g.VertOrient
+   Case 1,4,7:outer=outer &amp; "vertical-align: top; "
+   Case 2,5,8:outer=outer &amp; "vertical-align: middle; "
+   Case 3,6,9:outer=outer &amp; "vertical-align: bottom; "
+  End Select
+ Else
+  Select Case g.HoriOrient
+   Case 1
+    If wrap="NONE" Then
+     outer=outer &amp; "display: block; margin-left: auto; "
+    Else
+     outer=outer &amp; "float: right; " : attrs=" align=""right"""
+    End If
+   Case 2
+    outer=outer &amp; "display: block; margin-left: auto; margin-right: auto; "
+   Case 3
+    If wrap="NONE" Then
+     outer=outer &amp; "display: block; margin-right: auto; "
+    Else
+     outer=outer &amp; "float: left; ":attrs=" align=""left"""
+    End If
+   Case 0
+    If g.HoriOrientPosition&gt;=0 Then outer=outer &amp; "margin-left: " &amp; Pixels(g.HoriOrientPosition+g.LeftMargin) &amp; "; "
+    If wrap="NONE" Then outer=outer &amp; "display: block; "
+  End Select
+  If wrap="THROUGH" Then outer=outer &amp; "position: relative; "
+  If g.VertOrient=0 And g.VertOrientPosition&lt;&gt;0 Then outer=outer &amp; "position: relative; top: " &amp; Pixels(g.VertOrientPosition) &amp; "; "
+  If g.HoriOrient=0 And g.HoriOrientPosition&lt;0 Then outer=outer &amp; "position: relative; left: " &amp; Pixels(g.HoriOrientPosition) &amp; "; "
+ End If
+ angle=g.GraphicRotation/10
+ If angle&lt;&gt;0 Then rot="transform: rotate(" &amp; Numero(-angle) &amp; "deg); transform-origin: center; "
+ crop=g.GraphicCrop:natural=g.ActualSize
+ If crop.Left&lt;&gt;0 Or crop.Right&lt;&gt;0 Or crop.Top&lt;&gt;0 Or crop.Bottom&lt;&gt;0 Then
+  cw=natural.Width-crop.Left-crop.Right:ch=natural.Height-crop.Top-crop.Bottom
+  If cw&lt;=0 Or ch&lt;=0 Or natural.Width&lt;=0 Or natural.Height&lt;=0 Then GoTo FalhaImagem
+  x=-crop.Left*iw/cw:y=-crop.Top*ih/ch
+  st="position: absolute; max-width: none; width: " &amp; Pixels(natural.Width*iw/cw) &amp; "; height: " &amp; Pixels(natural.Height*ih/ch) &amp; "; left: " &amp; Pixels(x) &amp; "; top: " &amp; Pixels(y) &amp; "; "
+  tag="&lt;img src=""" &amp; src &amp; """ alt=""" &amp; Atributo(g.Title) &amp; """" &amp; Estilo(st) &amp; "&gt;"
+  ImagemObjeto="&lt;span" &amp; Estilo("display: inline-block; position: relative; overflow: hidden; width: " &amp; Pixels(iw) &amp; "; height: " &amp; Pixels(ih) &amp; "; " &amp; outer &amp; rot) &amp; "&gt;" &amp; tag &amp; "&lt;/span&gt;"
+ Else
+  st="width: " &amp; Pixels(iw) &amp; "; height: " &amp; Pixels(ih) &amp; "; " &amp; outer &amp; rot
+  ImagemObjeto="&lt;img src=""" &amp; src &amp; """ alt=""" &amp; Atributo(g.Title) &amp; """ width=""" &amp; Numero(Int(iw*96/2540+0.5)) &amp; """ height=""" &amp; Numero(Int(ih*96/2540+0.5)) &amp; """" &amp; attrs &amp; Estilo(st) &amp; "&gt;"
+ End If
+ PjeImages=PjeImages+1
+ Exit Function
+FalhaImagem:
+ PjeFailure="Não foi possível converter uma imagem ou objeto gráfico. Cópia cancelada para evitar omissões. [" &amp; stage &amp; ": " &amp; Error$ &amp; "]"
+End Function
+Function ImagensParagrafo(p As Object, ByRef antes As String) As String
+ On Error GoTo FalhaAncora
+ Dim i As Long,g As Object,a As Object,tx As Object,s As String, img As String
+ tx=p.getText()
+ For i=0 To PjeDoc.GraphicObjects.Count-1
+  g=PjeDoc.GraphicObjects.getByIndex(i)
+  If g.AnchorType=com.sun.star.text.TextContentAnchorType.AT_PARAGRAPH Then
+   a=g.getAnchor()
+   If EqualUnoObjects(a.getText(),tx) Then
+    If tx.compareRegionStarts(p.getStart(),a.getStart())=0 Then
+     img=ImagemObjeto(g)
+     If PjeFailure&lt;&gt;"" Then Exit Function
+     If InStr(img,"display: block;")&gt;0 And p.String&lt;&gt;"" Then
+      antes=antes &amp; ParagrafoImagem(img)
+     Else
+      s=s &amp; img
+     End If
+    End If
+   End If
+  End If
+ Next i
+ ImagensParagrafo=s
+ Exit Function
+FalhaAncora:
+ PjeFailure="Não foi possível conferir a ancoragem de uma imagem. Cópia cancelada. " &amp; Error$
+End Function
+Function LarguraBorda(b As Variant) As Long
+ Dim w As Long
+ w=b.LineWidth
+ If w=0 Then w=b.InnerLineWidth+b.OuterLineWidth+b.LineDistance
+ If b.LineStyle=32767 Then w=0
+ LarguraBorda=w
+End Function
+Function Separador(p As Object, b As Variant, vazio As Boolean) As String
+ Dim css As String, attrs As String, n As Long, w As Long
+ w=LarguraBorda(b)
+ n=Int(w*96/2540+0.5)
+ If n&lt;1 Then n=1
+ css="height: 0; border: 0; " &amp; Borda(b,"top") &amp; "color: " &amp; Cor(b.Color) &amp; "; "
+ If p.ParaLeftMargin=0 And p.ParaRightMargin=0 Then
+  css=css &amp; "width: 100%; "
+  attrs=" width=""100%"""
+ Else
+  css=css &amp; "width: auto; "
+ End If
+ css=css &amp; "margin-left: " &amp; Pixels(p.ParaLeftMargin) &amp; "; margin-right: " &amp; Pixels(p.ParaRightMargin) &amp; "; "
+ If vazio Then
+  css=css &amp; "margin-top: " &amp; Pixels(p.ParaTopMargin) &amp; "; margin-bottom: " &amp; Pixels(p.ParaBottomMargin) &amp; "; "
+ Else
+  css=css &amp; "margin-top: 0; margin-bottom: 0; "
+ End If
+ Separador="&lt;hr size=""" &amp; Numero(n) &amp; """ noshade=""noshade""" &amp; attrs &amp; Estilo(css) &amp; "&gt;"
+End Function
+Function ParagrafoImagem(img As String) As String
+ ' Block images must not occupy the first line of an indented text paragraph.
+ Dim al As String
+ al="left"
+ If InStr(img,"margin-left: auto;")&gt;0 Then
+  al="right"
+  If InStr(img,"margin-right: auto;")&gt;0 Then al="center"
+ End If
+ ParagrafoImagem="&lt;p" &amp; Estilo("text-align: " &amp; al &amp; "; text-indent: 0; ") &amp; " align=""" &amp; al &amp; """&gt;" &amp; img &amp; "&lt;/p&gt;" &amp; Chr(10)
+End Function
+Function EstiloParagrafo(p As Object) As String
+ Dim css As String, ls As Variant, ht As Double, grad As String
+ css="margin-top: " &amp; Pixels(p.ParaTopMargin) &amp; "; margin-bottom: " &amp; Pixels(p.ParaBottomMargin) &amp; "; "
+ ls=p.ParaLineSpacing
+ Select Case ls.Mode
+  Case 0:css=css &amp; "line-height: " &amp; Numero(ls.Height/100) &amp; "; "
+  Case 1
+   If ls.Height&gt;0 Then css=css &amp; "line-height: max(1.2em, " &amp; Pixels(ls.Height) &amp; "); "
+  Case 2:css=css &amp; "line-height: calc(1.2em + " &amp; Pixels(ls.Height) &amp; "); "
+  Case 3
+   If ls.Height&gt;0 Then css=css &amp; "line-height: " &amp; Pixels(ls.Height) &amp; "; "
+ End Select
+ If p.ParaBackColor&gt;=0 And Not p.ParaBackTransparent Then css=css &amp; "background-color: " &amp; Cor(p.ParaBackColor) &amp; "; "
+ If Tem(p,"FillStyle") And Tem(p,"FillGradient") Then
+  If p.FillStyle=com.sun.star.drawing.FillStyle.GRADIENT Then
+   grad=Gradiente(p.FillGradient)
+   If grad="" Then PjeFailure="Gradiente sem equivalente CSS direto. Cópia cancelada.":Exit Function
+   css=css &amp; "background-image: " &amp; grad &amp; "; "
+  End If
+ End If
+ If p.ParaKeepTogether Then css=css &amp; "break-after: avoid; page-break-after: avoid; "
+ If Not p.ParaSplit Then css=css &amp; "break-inside: avoid; page-break-inside: avoid; "
+ If p.ParaOrphans&gt;0 Then css=css &amp; "orphans: " &amp; Numero(p.ParaOrphans) &amp; "; "
+ If p.ParaWidows&gt;0 Then css=css &amp; "widows: " &amp; Numero(p.ParaWidows) &amp; "; "
+ If p.BreakType=com.sun.star.style.BreakType.PAGE_BEFORE Or p.BreakType=com.sun.star.style.BreakType.PAGE_BOTH Then css=css &amp; "break-before: page; page-break-before: always; "
+ If p.BreakType=com.sun.star.style.BreakType.PAGE_AFTER Or p.BreakType=com.sun.star.style.BreakType.PAGE_BOTH Then css=css &amp; "break-after: page; page-break-after: always; "
+ If p.BreakType=com.sun.star.style.BreakType.COLUMN_BEFORE Or p.BreakType=com.sun.star.style.BreakType.COLUMN_BOTH Then css=css &amp; "break-before: column; "
+ If p.BreakType=com.sun.star.style.BreakType.COLUMN_AFTER Or p.BreakType=com.sun.star.style.BreakType.COLUMN_BOTH Then css=css &amp; "break-after: column; "
+ EstiloParagrafo=css
+End Function
+Function TamanhoCapitular(p As Object) As Long
+ Dim dc As Variant, s As String, i As Long
+ dc=p.DropCapFormat
+ If dc.Lines&lt;2 Then Exit Function
+ s=p.String
+ If p.DropCapWholeWord Then
+  For i=1 To Len(s)
+   If InStr(" " &amp; Chr(9) &amp; Chr(10) &amp; Chr(13),Mid(s,i,1))&gt;0 Then Exit For
+  Next i
+  TamanhoCapitular=i-1
+ Else
+  TamanhoCapitular=dc.Count
+  If TamanhoCapitular&gt;Len(s) Then TamanhoCapitular=Len(s)
+ End If
+End Function
+Function EstiloCapitular(p As Object) As String
+ Dim dc As Variant, css As String, st As Object, fs As Double
+ dc=p.DropCapFormat
+ css="float: left; line-height: 1; font-size: " &amp; Numero(dc.Lines*100) &amp; "%; margin-right: " &amp; Pixels(dc.Distance) &amp; "; "
+ If p.DropCapCharStyleName&lt;&gt;"" Then
+  st=PjeDoc.StyleFamilies.getByName("CharacterStyles").getByName(p.DropCapCharStyleName)
+  If st.getPropertyState("CharFontName")=com.sun.star.beans.PropertyState.DIRECT_VALUE Then css=css &amp; Fonte(st,True)
+  If st.CharColor&gt;=0 Then css=css &amp; "color: " &amp; Cor(st.CharColor) &amp; "; "
+  If st.CharWeight&gt;=150 Then css=css &amp; "font-weight: bold; "
+  If st.CharPosture=1 Or st.CharPosture=2 Then css=css &amp; "font-style: italic; "
+ End If
+ EstiloCapitular=css
+End Function
+Function Paragrafo(p As Object) As Variant
+ Dim align As String, css As String, pe As Object, q As Object, kind As String, raw As String, runs As String
+ Dim topLine As Variant, bottomLine As Variant, isTop As Boolean, isBottom As Boolean, sideBorders As Boolean, hr As String, block As String, antes As String, img As String
+ Dim cap As Long, take As Long, capRuns As String, tag As String, hlevel As Long, textValue As String, headingAttrs As String
+ Select Case p.ParaAdjust
+  Case 0:align="left"
+  Case 1:align="right"
+  Case 2,4:align="justify"
+  Case 3:align="center"
+  Case Else:align="left"
+ End Select
+ css=EstiloParagrafo(p)
+ cap=TamanhoCapitular(p)
+ If p.ListId="" Then
+ If p.ParaLeftMargin&gt;0 Then css=css &amp; "padding-left: " &amp; Numero(p.ParaLeftMargin*150/4000) &amp; "px; "
+ If p.ParaLeftMargin&lt;0 Then css=css &amp; "margin-left: " &amp; Pixels(p.ParaLeftMargin) &amp; "; "
+ If p.ParaFirstLineIndent&lt;&gt;0 Then css=css &amp; "text-indent: " &amp; Numero(p.ParaFirstLineIndent*8/2000) &amp; "%; "
+ End If
+ If p.ParaRightMargin&gt;0 Then css=css &amp; "padding-right: " &amp; Pixels(p.ParaRightMargin) &amp; "; "
+ If p.ParaRightMargin&lt;0 Then css=css &amp; "margin-right: " &amp; Pixels(p.ParaRightMargin) &amp; "; "
+ pe=p.createEnumeration():runs=ImagensParagrafo(p,antes):raw=""
+ If PjeFailure&lt;&gt;"" Then Exit Function
+ Do While pe.hasMoreElements()
+  q=pe.nextElement():kind=q.TextPortionType
+  Select Case kind
+   Case "Text"
+    raw=raw &amp; q.String
+    If q.String&lt;&gt;"" Then
+     textValue=q.String
+     If cap&gt;0 Then
+      take=Len(textValue):If take&gt;cap Then take=cap
+      capRuns=capRuns &amp; Trecho(q,Left(textValue,take),True)
+      cap=cap-take:textValue=Mid(textValue,take+1)
+      If cap=0 Then runs=runs &amp; "&lt;span" &amp; Estilo(EstiloCapitular(p)) &amp; "&gt;" &amp; capRuns &amp; "&lt;/span&gt;":capRuns=""
+     End If
+     If textValue&lt;&gt;"" Then runs=runs &amp; Trecho(q,textValue)
+    End If
+   Case "Frame"
+    img=Imagem(q)
+    If PjeFailure&lt;&gt;"" Then Exit Function
+    If raw="" And runs="" And InStr(img,"display: block;")&gt;0 And p.String&lt;&gt;"" Then
+     antes=antes &amp; ParagrafoImagem(img)
+    Else
+     runs=runs &amp; img
+    End If
+    raw=raw &amp; q.String
+   Case "Bookmark","ReferenceMark","DocumentIndexMark","SoftPageBreak"
+   Case Else
+    PjeFailure="Elemento não suportado: " &amp; kind &amp; ". Cópia cancelada para evitar perda de texto."
+  End Select
+  If PjeFailure&lt;&gt;"" Then Exit Function
+ Loop
+ ' A linha horizontal nativa do Writer é uma borda inferior de parágrafo.
+ ' Linhas criadas pela autocorreção também podem estar em parágrafos com texto.
+ topLine=p.TopBorder:bottomLine=p.BottomBorder
+ isTop=(LarguraBorda(topLine)&gt;0):isBottom=(LarguraBorda(bottomLine)&gt;0)
+ sideBorders=(LarguraBorda(p.LeftBorder)&gt;0 Or LarguraBorda(p.RightBorder)&gt;0)
+ If Not sideBorders And (isTop Xor isBottom) And (raw="" Or p.ParaStyleName="Horizontal Line") Then
+  If isTop Then
+   hr=Separador(p,topLine,runs="")
+  Else
+   hr=Separador(p,bottomLine,runs="")
+  End If
+  If raw="" And runs="" Then
+   Paragrafo=Array(hr,raw): Exit Function
+  End If
+ ElseIf isTop Or isBottom Or sideBorders Then
+  css=css &amp; Borda(topLine,"top") &amp; Borda(bottomLine,"bottom") &amp; Borda(p.LeftBorder,"left") &amp; Borda(p.RightBorder,"right") &amp; "padding-top: " &amp; Pixels(p.TopBorderDistance) &amp; "; padding-bottom: " &amp; Pixels(p.BottomBorderDistance) &amp; "; "
+ End If
+ If capRuns&lt;&gt;"" Then runs="&lt;span" &amp; Estilo(EstiloCapitular(p)) &amp; "&gt;" &amp; capRuns &amp; "&lt;/span&gt;" &amp; runs
+ If runs="" Then runs="&lt;br&gt;"
+ ' A real heading gets a semantic element, without browser-default bold/size changing the source.
+ tag="p":hlevel=p.OutlineLevel
+ If hlevel&gt;=1 And hlevel&lt;=6 Then
+  tag="h" &amp; Numero(hlevel):css=css &amp; "font-weight: normal; font-size: inherit; "
+ End If
+ If hlevel&gt;6 Then headingAttrs=" role=""heading"" aria-level=""" &amp; Numero(hlevel) &amp; """"
+ ' Set paragraph font for line-height and empty paragraphs; text portions retain their own effective fonts.
+ If Not IsNull(p.CharHeight) Then
+  If p.CharHeight&gt;0 Then css=css &amp; "font-size: " &amp; Numero(p.CharHeight) &amp; "pt; "
+ End If
+ If Not IsNull(p.CharFontName) Then
+  If p.CharFontName&lt;&gt;"" Then css=css &amp; "font-family: " &amp; CssTexto(p.CharFontName) &amp; "; "
+ End If
+ If p.ListId&lt;&gt;"" Then css=css &amp; "color: initial; font-weight: normal; font-style: normal; "
+ block="&lt;" &amp; tag &amp; headingAttrs &amp; Estilo(css) &amp; " align=""" &amp; align &amp; """&gt;" &amp; runs &amp; "&lt;/" &amp; tag &amp; "&gt;"
+ If hr&lt;&gt;"" Then
+  If isTop Then
+   block=hr &amp; Chr(10) &amp; block
+  Else
+   block=block &amp; Chr(10) &amp; hr
+  End If
+ End If
+ Paragrafo=Array(antes &amp; block,raw)
+End Function
+Function Borda(b As Variant, lado As String) As String
+ Dim largura As Long, tipo As String
+ largura=b.LineWidth
+ If largura=0 Then largura=b.InnerLineWidth+b.OuterLineWidth+b.LineDistance
+ If largura=0 Or b.LineStyle=32767 Then
+  Borda="border-" &amp; lado &amp; ": none; ": Exit Function
+ End If
+ Select Case b.LineStyle
+  Case 1:tipo="dotted"
+  Case 2,14,16,17:tipo="dashed"
+  Case 3,4,5,6,7,8,9,15:tipo="double"
+  Case 10:tipo="ridge"
+  Case 11:tipo="groove"
+  Case 12:tipo="outset"
+  Case 13:tipo="inset"
+  Case Else:tipo="solid"
+ End Select
+ If b.InnerLineWidth&gt;0 And b.OuterLineWidth&gt;0 And b.LineStyle&lt;&gt;10 And b.LineStyle&lt;&gt;11 Then tipo="double"
+ Borda="border-" &amp; lado &amp; ": " &amp; Numero(largura*72/2540) &amp; "pt " &amp; tipo &amp; " " &amp; Cor(b.Color) &amp; "; "
+End Function
+Function GraficoData(g As Object) As String
+ On Error GoTo FalhaGrafico
+ Dim gp As Object,tmp As Object,fs As Object,inp As Object,n As Long,u As String,got As Long
+ Dim args(1) As New com.sun.star.beans.PropertyValue
+ Dim bytes() As Byte
+ tmp=CreateUnoService("com.sun.star.io.TempFile"):tmp.RemoveFile=True:u=tmp.Uri:tmp.closeOutput()
+ gp=CreateUnoService("com.sun.star.graphic.GraphicProvider")
+ args(0).Name="URL":args(0).Value=u:args(1).Name="MimeType":args(1).Value="image/png"
+ gp.storeGraphic(g,args())
+ fs=CreateUnoService("com.sun.star.ucb.SimpleFileAccess"):n=fs.getSize(u)
+ If n&lt;=0 Or n&gt;20000000 Then GoTo FalhaGrafico
+ inp=fs.openFileRead(u):got=inp.readBytes(bytes(),n):inp.closeInput()
+ If got&lt;&gt;n Then GoTo FalhaGrafico
+ GraficoData="data:image/png;base64," &amp; Base64Bytes(bytes())
+ Exit Function
+FalhaGrafico:
+ PjeFailure="Não foi possível converter o gráfico de fundo ou marcador. Cópia cancelada. " &amp; Error$
+End Function
+Function GraficoBitmap(bmp As Object) As String
+ On Error GoTo FalhaBitmap
+ Dim b As Variant, n As Long, i As Long, h(13) As Byte, headerSize As Long, offset As Long, bits As Long, colors As Long, tmp As Object, out As Object, gp As Object, g As Object
+ Dim args(0) As New com.sun.star.beans.PropertyValue
+ b=bmp.getDIB():n=UBound(b)+1
+ ' XBitmap returns a Windows DIB. Accept an already complete BMP as well.
+ If n&lt;40 Or n&gt;20000000 Then GoTo FalhaBitmap
+ tmp=CreateUnoService("com.sun.star.io.TempFile"):tmp.RemoveFile=True
+ out=tmp.getOutputStream()
+ If (b(0) And 255)&lt;&gt;66 Or (b(1) And 255)&lt;&gt;77 Then
+  headerSize=(b(0) And 255)+(b(1) And 255)*256+(b(2) And 255)*65536+(b(3) And 255)*16777216
+  bits=(b(14) And 255)+(b(15) And 255)*256
+  colors=(b(32) And 255)+(b(33) And 255)*256+(b(34) And 255)*65536+(b(35) And 255)*16777216
+  If colors=0 And bits&lt;=8 Then colors=2^bits
+  offset=14+headerSize+4*colors
+  If headerSize=40 And (b(16) And 255)=3 Then offset=offset+12
+  If offset&gt;n+14 Or offset&lt;54 Then GoTo FalhaBitmap
+  h(0)=66:h(1)=77
+  For i=0 To 3
+   h(2+i)=ByteS(Int((n+14)/256^i) Mod 256):h(10+i)=ByteS(Int(offset/256^i) Mod 256)
+  Next i
+  out.writeBytes(h())
+ End If
+ out.writeBytes(b):tmp.closeOutput()
+ gp=CreateUnoService("com.sun.star.graphic.GraphicProvider")
+ args(0).Name="URL":args(0).Value=tmp.Uri
+ g=gp.queryGraphic(args())
+ GraficoBitmap=GraficoData(g)
+ Exit Function
+FalhaBitmap:
+ PjeFailure="Não foi possível converter o marcador de imagem. Cópia cancelada. " &amp; Error$
+End Function
+Function ByteS(v As Long) As Integer
+ ByteS=v
+ If v&gt;127 Then ByteS=v-256
+End Function
+Function CorIntensidade(rgb As Long, intensidade As Long) As String
+ Dim rr As Long,gg As Long,bb As Long
+ rr=Int((Int(rgb/65536) And 255)*intensidade/100+0.5)
+ gg=Int((Int(rgb/256) And 255)*intensidade/100+0.5)
+ bb=Int((rgb And 255)*intensidade/100+0.5)
+ CorIntensidade=Cor(rr*65536+gg*256+bb)
+End Function
+Function StopsGradiente(g As Variant) As String
+ On Error GoTo Dois
+ Dim st As Variant,x As Variant, pos As Double, rgb As Long, css As String, intensidade As Double, off As Double
+ st=g.ColorStops
+ For Each x In st
+  pos=x.StopOffset:off=g.Border+(100-g.Border)*pos
+  intensidade=g.StartIntensity+(g.EndIntensity-g.StartIntensity)*pos
+  rgb=Int(x.StopColor.Red*255+0.5)*65536+Int(x.StopColor.Green*255+0.5)*256+Int(x.StopColor.Blue*255+0.5)
+  If css&lt;&gt;"" Then css=css &amp; ", "
+  css=css &amp; CorIntensidade(rgb,Int(intensidade+0.5)) &amp; " " &amp; Numero(off) &amp; "%"
+ Next x
+ If css&lt;&gt;"" Then StopsGradiente=css:Exit Function
+Dois:
+ StopsGradiente=CorIntensidade(g.StartColor,g.StartIntensity) &amp; " " &amp; Numero(g.Border) &amp; "%, " &amp; CorIntensidade(g.EndColor,g.EndIntensity) &amp; " 100%"
+End Function
+Function Gradiente(g As Variant) As String
+ Dim a As String,b As String,ang As Double,stops As String
+ a=CorIntensidade(g.StartColor,g.StartIntensity):b=CorIntensidade(g.EndColor,g.EndIntensity):ang=180-g.Angle/10
+ stops=StopsGradiente(g)
+ If g.Style=com.sun.star.awt.GradientStyle.LINEAR Then
+  Gradiente="linear-gradient(" &amp; Numero(ang) &amp; "deg, " &amp; stops &amp; ")"
+ ElseIf g.Style=com.sun.star.awt.GradientStyle.AXIAL Then
+  Gradiente="linear-gradient(" &amp; Numero(ang) &amp; "deg, " &amp; a &amp; ", " &amp; b &amp; ", " &amp; a &amp; ")"
+ ElseIf g.Style=com.sun.star.awt.GradientStyle.RADIAL Then
+  Gradiente="radial-gradient(circle at " &amp; Numero(g.XOffset) &amp; "% " &amp; Numero(g.YOffset) &amp; "%, " &amp; stops &amp; ")"
+ ElseIf g.Style=com.sun.star.awt.GradientStyle.ELLIPTICAL Then
+  Gradiente="radial-gradient(ellipse at " &amp; Numero(g.XOffset) &amp; "% " &amp; Numero(g.YOffset) &amp; "%, " &amp; stops &amp; ")"
+ End If
+End Function
+Function Fundo(o As Object) As String
+ On Error GoTo FalhaFundo
+ Dim css As String, g As Object, loc As Variant, pos As String, src As String, grad As String
+ If o.BackColor&gt;=0 And Not o.BackTransparent Then css="background-color: " &amp; Cor(o.BackColor) &amp; "; "
+ If Tem(o,"FillStyle") And Tem(o,"FillGradient") Then
+  If o.FillStyle=com.sun.star.drawing.FillStyle.GRADIENT Then
+   grad=Gradiente(o.FillGradient)
+   If grad="" Then PjeFailure="Gradiente sem equivalente CSS direto. Cópia cancelada.":Exit Function
+   css=css &amp; "background-image: " &amp; grad &amp; "; "
+  End If
+ End If
+ If Tem(o,"BackGraphic") Then
+  g=o.BackGraphic
+  If Not IsNull(g) Then
+   loc=o.BackGraphicLocation
+   If loc&lt;&gt;com.sun.star.style.GraphicLocation.NONE Then
+    src=GraficoData(g):If PjeFailure&lt;&gt;"" Then Exit Function
+    css=css &amp; "background-image: url(" &amp; CssTexto(src) &amp; "); "
+    If loc=com.sun.star.style.GraphicLocation.TILED Then
+     css=css &amp; "background-repeat: repeat; "
+    ElseIf loc=com.sun.star.style.GraphicLocation.AREA Then
+     css=css &amp; "background-size: 100% 100%; background-repeat: no-repeat; "
+    Else
+     pos="center center"
+     If loc=com.sun.star.style.GraphicLocation.LEFT_TOP Then pos="left top"
+     If loc=com.sun.star.style.GraphicLocation.MIDDLE_TOP Then pos="center top"
+     If loc=com.sun.star.style.GraphicLocation.RIGHT_TOP Then pos="right top"
+     If loc=com.sun.star.style.GraphicLocation.LEFT_MIDDLE Then pos="left center"
+     If loc=com.sun.star.style.GraphicLocation.RIGHT_MIDDLE Then pos="right center"
+     If loc=com.sun.star.style.GraphicLocation.LEFT_BOTTOM Then pos="left bottom"
+     If loc=com.sun.star.style.GraphicLocation.MIDDLE_BOTTOM Then pos="center bottom"
+     If loc=com.sun.star.style.GraphicLocation.RIGHT_BOTTOM Then pos="right bottom"
+     css=css &amp; "background-repeat: no-repeat; background-position: " &amp; pos &amp; "; "
+    End If
+   End If
+  End If
+ End If
+ Fundo=css
+ Exit Function
+FalhaFundo:
+ PjeFailure="Não foi possível ler o preenchimento da tabela. Cópia cancelada. " &amp; Error$
+End Function
+Function NomeColuna(n As Long) As String
+ Dim k As Long, txt As String
+ k=n+1
+ Do While k&gt;0
+  k=k-1:txt=Chr(65+(k Mod 26)) &amp; txt:k=Int(k/26)
+ Loop
+ NomeColuna=txt
+End Function
+Function Tabela(t As Object) As Variant
+ On Error GoTo Complexa
+ Dim nr As Long,i As Long,j As Long,k As Long, cell As Object,row As Object,sep As Variant,last As Long,lim As Long,total As Long,w As Double,css As String,c As Variant,html As String,raw As String,names As Variant,tw As String,tc As String,rc As String,al As String,cn As String,sp As Long,rs As Long,seen As Long,nsep As Long,collapse As String
+ Dim grid() As Boolean, covered() As Long
+ Dim stageT As String, row2 As Object, sep2 As Variant
+ Dim header As Long, cellTag As String, sectionTag As String, bg As String, tableBg As String, rowBg As String, crossHead As Boolean, headStart As Long, headEnd As Long, headClose As Long
+ stageT="início"
+ stageT="dimensões":nr=t.Rows.Count:names=t.CellNames:total=t.TableColumnRelativeSum
+ If total&lt;=0 Or total&gt;32767 Then GoTo Complexa
+ stageT="grade":ReDim grid(total), covered(total)
+ grid(0)=True:grid(total)=True
+ ' Todas as fronteiras reais da tabela, inclusive entre linhas de larguras distintas.
+ For i=0 To nr-1
+  row=t.Rows.getByIndex(i):sep=row.TableColumnSeparators
+  For j=0 To UBound(sep)
+   If sep(j).Position&lt;=0 Or sep(j).Position&gt;=total Then GoTo Complexa
+   If sep(j).IsVisible Then grid(sep(j).Position)=True
+  Next j
+ Next i
+ stageT="largura":tw="100%":al="":tc=""
+ If t.IsWidthRelative And t.RelativeWidth&gt;0 Then
+  tw=Numero(t.RelativeWidth) &amp; "%"
+ ElseIf t.HoriOrient&lt;&gt;6 And t.Width&gt;0 And t.Width&lt;30000 Then
+  tw=Pixels(t.Width)
+ End If
+ Select Case t.HoriOrient
+  Case 1:tc="margin-left: auto; margin-right: 0; ":al=" align=""right"""
+  Case 2:tc="margin-left: auto; margin-right: auto; ":al=" align=""center"""
+  Case 3:tc="margin-left: 0; margin-right: auto; ":al=" align=""left"""
+  Case 0,7:tc="margin-left: " &amp; Pixels(t.LeftMargin) &amp; "; margin-right: " &amp; Pixels(t.RightMargin) &amp; "; "
+  Case 6:tw="100%"
+  Case Else:tc="margin-left: " &amp; Pixels(t.LeftMargin) &amp; "; margin-right: " &amp; Pixels(t.RightMargin) &amp; "; "
+ End Select
+ stageT="margens":If t.TopMargin&lt;&gt;0 Then tc=tc &amp; "margin-top: " &amp; Pixels(t.TopMargin) &amp; "; "
+ If t.BottomMargin&lt;&gt;0 Then tc=tc &amp; "margin-bottom: " &amp; Pixels(t.BottomMargin) &amp; "; "
+ stageT="colapso":collapse="separate"
+ If t.CollapsingBorders Then collapse="collapse"
+ tableBg=Fundo(t):If PjeFailure&lt;&gt;"" Then Exit Function
+ html="&lt;table border=""0"" cellspacing=""0"" cellpadding=""0""" &amp; al &amp; Estilo("width: " &amp; tw &amp; "; border-collapse: " &amp; collapse &amp; "; border-spacing: 0; float: none; " &amp; tc &amp; tableBg) &amp; "&gt;&lt;colgroup&gt;"
+ last=0
+ For k=1 To total
+  If grid(k) Then
+   html=html &amp; "&lt;col" &amp; Estilo("width: " &amp; Numero((k-last)*100/total) &amp; "%;") &amp; "&gt;":last=k
+  End If
+ Next k
+ header=t.HeaderRowCount
+ If header&gt;nr Then header=nr
+ sectionTag="tbody":If header&gt;0 Then sectionTag="thead"
+ html=html &amp; "&lt;/colgroup&gt;"
+ headStart=Len(html)+1
+ html=html &amp; "&lt;" &amp; sectionTag
+ If header&gt;0 Then
+  If t.RepeatHeadline Then
+   html=html &amp; Estilo("display: table-header-group;")
+  Else
+   html=html &amp; Estilo("display: table-row-group;")
+  End If
+ End If
+ html=html &amp; "&gt;":headEnd=Len(html)
+ For i=0 To nr-1
+  If i=header And header&gt;0 Then
+   headClose=Len(html)+1
+   html=html &amp; "&lt;/thead&gt;&lt;tbody&gt;":sectionTag="tbody"
+  End If
+  cellTag="td":If i&lt;header Then cellTag="th"
+  stageT="linha " &amp; i:row2=t.Rows.getByIndex(i)
+  stageT="sep":sep2=row2.TableColumnSeparators
+  stageT="nsep":last=0:nsep=UBound(sep2)+1
+  stageT="fundo":rowBg=Fundo(row2):rc=rowBg
+  If PjeFailure&lt;&gt;"" Then Exit Function
+  stageT="altura":If Not row2.IsAutoHeight And row2.Height&gt;0 Then rc=rc &amp; "height: " &amp; Pixels(row2.Height) &amp; "; "
+  stageT="tr":html=html &amp; "&lt;tr" &amp; Estilo(rc) &amp; "&gt;"
+  For j=0 To nsep
+   stageT="fronteira " &amp; j
+   If j&lt;nsep Then
+    If Not sep2(j).IsVisible Then GoTo ProximaFronteira
+    lim=sep2(j).Position
+   Else
+    lim=total
+   End If
+   If lim&lt;=last Then GoTo Complexa
+   stageT="nome":cn=NomeColuna(j) &amp; Trim(Str(i+1))
+   ' Uma célula coberta por rowspan não deve ser emitida novamente.
+   stageT="cobertura":If covered(last)&gt;i Then
+    For k=last To lim-1
+     If covered(k)&lt;=i Then GoTo Complexa
+    Next k
+    raw=raw &amp; Chr(10)
+    last=lim:GoTo ProximaFronteira
+   End If
+   For k=last To lim-1
+    If covered(k)&gt;i Then GoTo Complexa
+   Next k
+   stageT="célula " &amp; cn:cell=t.getCellByName(cn)
+   stageT="rowspan " &amp; cn:rs=cell.RowSpan
+   If rs&lt;1 Or i+rs&gt;nr Then GoTo Complexa
+   If i&lt;header And i+rs&gt;header Then crossHead=True
+   sp=0
+   For k=last+1 To lim
+    If grid(k) Then sp=sp+1
+   Next k
+   If sp&lt;1 Then GoTo Complexa
+   For k=last To lim-1
+    covered(k)=i+rs
+   Next k
+   w=(lim-last)*100/total:last=lim
+   css="width: " &amp; Numero(w) &amp; "%; "
+   css=css &amp; Borda(cell.TopBorder,"top") &amp; Borda(cell.RightBorder,"right") &amp; Borda(cell.BottomBorder,"bottom") &amp; Borda(cell.LeftBorder,"left")
+   css=css &amp; "padding: " &amp; Pixels(cell.TopBorderDistance) &amp; " " &amp; Pixels(cell.RightBorderDistance) &amp; " " &amp; Pixels(cell.BottomBorderDistance) &amp; " " &amp; Pixels(cell.LeftBorderDistance) &amp; "; "
+   bg=Fundo(cell):If PjeFailure&lt;&gt;"" Then Exit Function
+   ' Let CSS show row/table background through transparent cells (including tiled images).
+   css=css &amp; bg
+   If bg="" Then
+    If InStr(rowBg,"background-image:")=0 And rowBg&lt;&gt;"" Then css=css &amp; rowBg
+    If rowBg="" And InStr(tableBg,"background-image:")=0 Then css=css &amp; tableBg
+   End If
+   If cellTag="th" Then css=css &amp; "font-weight: normal; "
+   Select Case cell.WritingMode
+    Case 1:css=css &amp; "direction: rtl; "
+    Case 2:css=css &amp; "writing-mode: vertical-rl; "
+    Case 3:css=css &amp; "writing-mode: vertical-lr; "
+    Case 5:css=css &amp; "writing-mode: vertical-lr; transform: rotate(180deg); "
+    Case 6:css=css &amp; "writing-mode: vertical-rl; text-orientation: sideways; "
+   End Select
+   Select Case cell.VertOrient
+    Case 2:css=css &amp; "vertical-align: middle; "
+    Case 3:css=css &amp; "vertical-align: bottom; "
+    Case Else:css=css &amp; "vertical-align: top; "
+   End Select
+   stageT="conteúdo " &amp; cn:c=Blocos(cell)
+   If PjeFailure&lt;&gt;"" Then Exit Function
+   If c(1)&lt;&gt;cell.String Then
+    PjeFailure="A conferência do texto de uma célula não coincidiu. Cópia cancelada.":Exit Function
+   End If
+   If seen&gt;0 Then raw=raw &amp; Chr(10)
+   seen=seen+1:raw=raw &amp; c(1)
+   html=html &amp; "&lt;" &amp; cellTag
+   If sp&gt;1 Then html=html &amp; " colspan=""" &amp; Numero(sp) &amp; """"
+   If rs&gt;1 Then html=html &amp; " rowspan=""" &amp; Numero(rs) &amp; """"
+   html=html &amp; Estilo(css) &amp; "&gt;" &amp; c(0) &amp; "&lt;/" &amp; cellTag &amp; "&gt;"
+ProximaFronteira:
+  Next j
+  If last&lt;&gt;total Then GoTo Complexa
+  html=html &amp; "&lt;/tr&gt;"
+ Next i
+ If seen&lt;&gt;UBound(names)+1 Then GoTo Complexa
+ If crossHead And headClose&gt;0 Then
+  html=Left(html,headClose-1) &amp; Mid(html,headClose+Len("&lt;/thead&gt;&lt;tbody&gt;"))
+  html=Left(html,headStart-1) &amp; "&lt;tbody&gt;" &amp; Mid(html,headEnd+1)
+ End If
+ Tabela=Array(html &amp; "&lt;/" &amp; sectionTag &amp; "&gt;&lt;/table&gt;",raw)
+ Exit Function
+Complexa:
+ PjeFailure="Não foi possível mapear todas as células da tabela. Cópia cancelada para evitar omissões. " &amp; stageT &amp; " " &amp; Error$
+End Function
+Function RomanoLista(n As Long) As String
+ Dim values As Variant, symbols As Variant, i As Long, out As String
+ If n&lt;1 Or n&gt;3999 Then Exit Function
+ values=Array(1000,900,500,400,100,90,50,40,10,9,5,4,1)
+ symbols=Array("M","CM","D","CD","C","XC","L","XL","X","IX","V","IV","I")
+ For i=0 To UBound(values)
+  Do While n&gt;=values(i)
+   out=out &amp; symbols(i):n=n-values(i)
+  Loop
+ Next i
+ RomanoLista=out
+End Function
+Function ValorLista(label As String, typ As Long) As Long
+ Dim k As Long, n As Long, i As Long, ch As String, clean As String
+ If Right(label,1)&lt;&gt;"." Then Exit Function
+ clean=Left(label,Len(label)-1)
+ If clean="" Then Exit Function
+ Select Case typ
+ Case 4
+  If Len(clean)&gt;9 Then Exit Function
+  For i=1 To Len(clean)
+   ch=Mid(clean,i,1):If ch&lt;"0" Or ch&gt;"9" Then Exit Function
+  Next i
+  n=CLng(clean)
+  If CStr(n)&lt;&gt;clean Then Exit Function
+ Case 0,1
+  If typ=0 And clean&lt;&gt;UCase(clean) Then Exit Function
+  If typ=1 And clean&lt;&gt;LCase(clean) Then Exit Function
+  If Len(clean)&gt;6 Then Exit Function
+  clean=UCase(clean)
+  For i=1 To Len(clean)
+   k=Asc(Mid(clean,i,1))-64:If k&lt;1 Or k&gt;26 Then Exit Function
+   n=n*26+k
+  Next i
+ Case 2,3
+  If typ=2 And clean&lt;&gt;UCase(clean) Then Exit Function
+  If typ=3 And clean&lt;&gt;LCase(clean) Then Exit Function
+  clean=UCase(clean)
+  For i=1 To 3999
+   If RomanoLista(i)=clean Then n=i:Exit For
+  Next i
+ End Select
+ ValorLista=n
+End Function
+Function InfoLista(p As Object, lev As Long) As Variant
+ Dim props As Variant, x As Variant, typ As Long, bullet As String, tag As String, css As String, label As String, n As Long, at As String, custom As String
+ Dim charStyle As String, markerCSS As String, graphic As Object, graphicSrc As String, bitmap As Object, hasGraphic As Boolean, gsize As Variant, sty As Object, chSize As Long, markerGap As Long, follow As Long, labelCss As String
+ Dim graphW As Long, graphH As Long, parts As Variant, hierarchical As Boolean, parentCount As Long, formatStr As String, lastNumber As Long, baseSize As Double, i As Long
+ props=p.NumberingRules.getByIndex(lev):typ=-1
+ For Each x In props
+  Select Case x.Name
+   Case "NumberingType":typ=x.Value
+   Case "BulletChar":bullet=x.Value
+   Case "CharStyleName":charStyle=x.Value
+   Case "BulletRelSize":chSize=x.Value
+   Case "GraphicBitmap":bitmap=x.Value
+   Case "Graphic":graphic=x.Value
+   Case "GraphicSize":gsize=x.Value:graphW=gsize.Width:graphH=gsize.Height
+   Case "ParentNumbering":parentCount=x.Value
+   Case "ListFormat":formatStr=x.Value
+   Case "FirstLineIndent":markerGap=-x.Value
+   Case "SymbolTextDistance":If markerGap=0 Then markerGap=x.Value
+   Case "LabelFollowedBy":follow=x.Value
+  End Select
+ Next x
+ tag="ul":css="":label=p.ListLabelString:n=0:at="":custom=""
+ Select Case typ
+ Case 6
+  Select Case bullet
+   Case Chr(8226),Chr(9679):css="disc"
+   Case Chr(9702),Chr(9675):css="circle"
+   Case Chr(9642),Chr(9632):css="square"
+   Case Else:css="none":custom=bullet
+  End Select
+ Case 0,1,2,3,4
+  tag="ol":n=ValorLista(label,typ)
+  Select Case typ
+   Case 0:css="upper-alpha":at="A"
+   Case 1:css="lower-alpha":at="a"
+   Case 2:css="upper-roman":at="I"
+   Case 3:css="lower-roman":at="i"
+   Case 4:css="decimal":at="1"
+  End Select
+  If n&lt;=0 Then
+   css="none":custom=label:at=""
+   If typ=4 And parentCount&gt;1 And Right(label,1)="." Then
+    parts=Split(Left(label,Len(label)-1),".")
+    If UBound(parts)+1=parentCount Then
+     hierarchical=True
+     For i=0 To UBound(parts)
+      If ValorLista(parts(i) &amp; ".",4)&lt;=0 Then hierarchical=False
+     Next i
+     If hierarchical Then n=ValorLista(parts(UBound(parts)) &amp; ".",4):at="1"
+    End If
+   End If
+  End If
+ Case 8
+  css="none"
+  If Not IsNull(graphic) Then
+   graphicSrc=GraficoData(graphic)
+  ElseIf Not IsNull(bitmap) Then
+   If HasUnoInterfaces(bitmap,"com.sun.star.graphic.XGraphic") Then
+    graphicSrc=GraficoData(bitmap)
+   Else
+    graphicSrc=GraficoBitmap(bitmap)
+   End If
+  End If
+  If graphicSrc="" Then PjeFailure="Marcador de imagem sem gráfico acessível. Cópia cancelada.":Exit Function
+ Case 5
+  css="none":custom=label
+ Case Else
+  If label="" Then
+   PjeFailure="Tipo de marcador de lista sem representação HTML segura. Cópia cancelada."
+  Else
+   tag="ol":css="none":custom=label
+  End If
+ End Select
+ baseSize=12
+ If Not IsNull(p.CharHeight) Then
+  If p.CharHeight&gt;0 Then baseSize=p.CharHeight
+ End If
+ markerCSS="font-size: " &amp; Numero(baseSize) &amp; "pt; color: initial; font-weight: normal; font-style: normal; "
+ If Not IsNull(p.CharColor) Then
+  If p.CharColor&gt;=0 Then markerCSS=markerCSS &amp; "color: " &amp; Cor(p.CharColor) &amp; "; "
+ End If
+ If charStyle&lt;&gt;"" Then
+  If PjeDoc.StyleFamilies.getByName("CharacterStyles").hasByName(charStyle) Then
+   sty=PjeDoc.StyleFamilies.getByName("CharacterStyles").getByName(charStyle)
+   If sty.CharColor&gt;=0 Then markerCSS=markerCSS &amp; "color: " &amp; Cor(sty.CharColor) &amp; "; "
+   If sty.getPropertyState("CharHeight")=com.sun.star.beans.PropertyState.DIRECT_VALUE Then
+    baseSize=sty.CharHeight:markerCSS=markerCSS &amp; "font-size: " &amp; Numero(baseSize) &amp; "pt; "
+   End If
+   If sty.getPropertyState("CharFontName")=com.sun.star.beans.PropertyState.DIRECT_VALUE Then markerCSS=markerCSS &amp; Fonte(sty,True)
+   If sty.CharWeight&gt;=150 Then markerCSS=markerCSS &amp; "font-weight: bold; "
+   If sty.CharPosture=1 Or sty.CharPosture=2 Then markerCSS=markerCSS &amp; "font-style: italic; "
+  End If
+ End If
+ If chSize&gt;0 And chSize&lt;&gt;100 Then markerCSS=markerCSS &amp; "font-size: " &amp; Numero(baseSize*chSize/100) &amp; "pt; "
+ If p.ParaFirstLineIndent&lt;0 Then markerGap=-p.ParaFirstLineIndent
+ InfoLista=Array(tag,css,n,at,custom,markerCSS,graphicSrc,markerGap,graphW,graphH,hierarchical,parentCount)
+End Function
+Function InserirMarcador(item As String, marker As String) As String
+ Dim i As Long, j As Long, last As Long, opening As String, ch As String
+ i=1
+ Do
+  j=InStr(i,item,"&lt;")
+  If j=0 Then Exit Do
+  opening=Mid(item,j,3)
+  If opening="&lt;p " Or opening="&lt;p&gt;" Then last=j
+  If Left(opening,2)="&lt;h" Then
+   ch=Right(opening,1)
+   If ch&gt;="1" And ch&lt;="6" Then last=j
+  End If
+  i=j+1
+ Loop
+ If last&gt;0 Then
+  j=InStr(last,item,"&gt;")
+  If j&gt;0 Then InserirMarcador=Left(item,j) &amp; marker &amp; Mid(item,j+1):Exit Function
+ End If
+ InserirMarcador=marker &amp; item
+End Function
+Function Blocos(r As Object) As Variant
+ Dim en As Object,p As Object,c As Variant,html As String,raw As String,n As Long
+ Dim depth As Long,lev As Long,baseLev As Long,i As Long,ident As String,oldId As String,styleName As String,oldStyle As String,info As Variant,indent As Double,delta As Double,attrs As String,css As String,item As String,ruleCount As Long
+ Dim tags() As String, styles() As String, indents() As Double, nextVal() As Long
+ Dim markCss As String, atPos As Long, marker As String, isHier As Boolean, vals As Variant, allDecimal As Boolean, markerStyle As String, gAttr As String, st As String
+ depth=-1:baseLev=0
+ en=r.createEnumeration()
+ Do While en.hasMoreElements()
+  p=en.nextElement():ident="":styleName=""
+  If p.supportsService("com.sun.star.text.Paragraph") Then
+   ident=p.ListId:styleName=p.NumberingStyleName
+   c=Paragrafo(p)
+  ElseIf p.supportsService("com.sun.star.text.TextTable") Then
+   c=Tabela(p)
+  Else
+   PjeFailure="Objeto não suportado. Cópia cancelada.": Exit Function
+  End If
+  If PjeFailure&lt;&gt;"" Then Exit Function
+  If n&gt;0 Then html=html &amp; Chr(10):raw=raw &amp; Chr(10)
+  n=n+1:raw=raw &amp; c(1)
+  If ident="" Or ident&lt;&gt;oldId Or styleName&lt;&gt;oldStyle Then
+   Do While depth&gt;=0
+    html=html &amp; "&lt;/li&gt;&lt;/" &amp; tags(depth) &amp; "&gt;":depth=depth-1
+   Loop
+  End If
+  If ident="" Then
+   html=html &amp; c(0):oldId="":oldStyle=""
+  Else
+   lev=p.NumberingLevel
+   ruleCount=p.NumberingRules.Count
+   If lev&lt;0 Or lev&gt;=ruleCount Then
+    PjeFailure="Nível de lista inválido. Cópia cancelada.":Exit Function
+   End If
+   If depth&gt;=0 And lev&lt;baseLev Then
+    Do While depth&gt;=0
+     html=html &amp; "&lt;/li&gt;&lt;/" &amp; tags(depth) &amp; "&gt;":depth=depth-1
+    Loop
+   End If
+   If depth&lt;0 Then
+    baseLev=lev:ReDim tags(ruleCount), styles(ruleCount), indents(ruleCount), nextVal(ruleCount)
+   End If
+   lev=lev-baseLev
+   If lev&gt;UBound(tags) Then
+    ReDim Preserve tags(lev), styles(lev), indents(lev), nextVal(lev)
+   End If
+   info=InfoLista(p,p.NumberingLevel)
+   If PjeFailure&lt;&gt;"" Then Exit Function
+   indent=p.ParaLeftMargin+p.ParaFirstLineIndent
+   If indent&lt;0 Then indent=0
+   Do While depth&gt;lev
+    html=html &amp; "&lt;/li&gt;&lt;/" &amp; tags(depth) &amp; "&gt;":depth=depth-1
+   Loop
+   If depth=lev And Not p.NumberingIsNumber Then
+    html=html &amp; c(0)
+   Else
+    If depth=lev Then
+     If tags(depth)&lt;&gt;info(0) Or styles(depth)&lt;&gt;info(1) Or p.ParaIsNumberingRestart Then
+      html=html &amp; "&lt;/li&gt;&lt;/" &amp; tags(depth) &amp; "&gt;":depth=depth-1
+     Else
+      html=html &amp; "&lt;/li&gt;"
+     End If
+    End If
+    Do While depth&lt;lev
+     depth=depth+1
+     If depth&lt;lev Then
+      tags(depth)="ul":styles(depth)="none":indents(depth)=0:nextVal(depth)=0
+      html=html &amp; "&lt;ul" &amp; Estilo("list-style-type: none; padding-left: 0;") &amp; "&gt;&lt;li" &amp; Estilo("list-style-type: none;") &amp; "&gt;"
+     Else
+      tags(depth)=info(0):styles(depth)=info(1):indents(depth)=indent:nextVal(depth)=info(2)
+      delta=indent
+      If depth&gt;0 Then delta=indent-indents(depth-1)
+      If delta&lt;0 Then delta=0
+      css="list-style-type: " &amp; info(1) &amp; "; padding-left: " &amp; Numero(delta*150/4000) &amp; "px; "
+      attrs=""
+      If info(3)&lt;&gt;"" Then attrs=" type=""" &amp; info(3) &amp; """"
+      If info(0)="ol" And info(2)&gt;0 And info(2)&lt;&gt;1 Then attrs=attrs &amp; " start=""" &amp; Numero(info(2)) &amp; """"
+      html=html &amp; "&lt;" &amp; tags(depth) &amp; attrs &amp; Estilo(css) &amp; "&gt;"
+     End If
+    Loop
+    attrs="":item=c(0):markCss=info(5):isHier=False
+    If info(7)&gt;0 And info(4)="" And info(6)="" Then markCss=markCss &amp; "padding-left: " &amp; Pixels(info(7)) &amp; "; "
+    If info(10) And baseLev=0 And info(11)=depth+1 Then
+     allDecimal=True
+     For i=0 To depth-1
+      If tags(i)&lt;&gt;"ol" Then allDecimal=False
+      If styles(i)&lt;&gt;"decimal" And styles(i)&lt;&gt;"none" Then allDecimal=False
+     Next i
+     If allDecimal Then isHier=True:PjeHier=True
+    End If
+    If Not p.NumberingIsNumber Then
+     markCss=markCss &amp; "list-style-type: none; list-style-image: none; "
+    ElseIf info(1)="none" Then
+     markCss=markCss &amp; "list-style-type: none; "
+     marker="":markerStyle=info(5)
+     If info(7)&gt;0 Then markerStyle=markerStyle &amp; "margin-right: " &amp; Pixels(info(7)) &amp; "; "
+     If info(6)&lt;&gt;"" Then
+      gAttr="":st="vertical-align: middle; "
+      If info(8)&gt;0 Then gAttr=gAttr &amp; " width=""" &amp; Numero(Int(info(8)*96/2540+0.5)) &amp; """":st=st &amp; "width: " &amp; Pixels(info(8)) &amp; "; "
+      If info(9)&gt;0 Then gAttr=gAttr &amp; " height=""" &amp; Numero(Int(info(9)*96/2540+0.5)) &amp; """":st=st &amp; "height: " &amp; Pixels(info(9)) &amp; "; "
+      If info(7)&gt;0 Then st=st &amp; "margin-right: " &amp; Pixels(info(7)) &amp; "; "
+      marker="&lt;img src=""" &amp; info(6) &amp; """ alt=""""" &amp; gAttr &amp; Estilo(st) &amp; "&gt;"
+     ElseIf info(4)&lt;&gt;"" Then
+      gAttr=""
+      If isHier Then gAttr=" class=""pje-copy-label""":attrs=attrs &amp; " class=""pje-copy-hier"""
+      marker="&lt;span" &amp; gAttr &amp; Estilo(markerStyle) &amp; "&gt;" &amp; Escapar(info(4)) &amp; "&amp;nbsp;&lt;/span&gt;"
+     End If
+     If marker&lt;&gt;"" Then item=InserirMarcador(item,marker)
+     If isHier Then
+      If info(2)&lt;&gt;nextVal(depth) Then attrs=attrs &amp; " value=""" &amp; Numero(info(2)) &amp; """"
+      nextVal(depth)=info(2)+1
+     End If
+    ElseIf info(0)="ol" And info(2)&gt;0 Then
+     If info(2)&lt;&gt;nextVal(depth) Then attrs=" value=""" &amp; Numero(info(2)) &amp; """"
+     nextVal(depth)=info(2)+1
+    End If
+    html=html &amp; "&lt;li" &amp; attrs &amp; Estilo(markCss) &amp; "&gt;" &amp; item
+   End If
+   oldId=ident:oldStyle=styleName
+  End If
+ Loop
+ Do While depth&gt;=0
+  html=html &amp; "&lt;/li&gt;&lt;/" &amp; tags(depth) &amp; "&gt;":depth=depth-1
+ Loop
+ Blocos=Array(html,raw)
+End Function
+Function CoordenadaCelula(s As String) As Variant
+ Dim col As Long,i As Long,c As Long,num As String
+ s=UCase(s)
+ For i=1 To Len(s)
+  c=Asc(Mid(s,i,1))
+  If c&lt;65 Or c&gt;90 Then Exit For
+  col=col*26+c-64
+ Next i
+ num=Mid(s,i)
+ If col=0 Or num="" Or Not IsNumeric(num) Then CoordenadaCelula=Array(-1,-1):Exit Function
+ If CStr(CLng(num))&lt;&gt;num Then CoordenadaCelula=Array(-1,-1):Exit Function
+ CoordenadaCelula=Array(col-1,CLng(num)-1)
+End Function
+Function TabelaSelecao(t As Object, faixa As String) As Variant
+ On Error GoTo FalhaSel
+ Dim a As Variant,b As Variant, parts As Variant, i As Long,j As Long, row As Object, cell As Object, sep As Variant, html As String, raw As String, css As String, c As Variant, seen As Long, total As Long, leftEdge As Long,rightEdge As Long, first As Long,last As Long,w As Double,st As String
+ parts=Split(faixa,":"):a=CoordenadaCelula(parts(0)):b=a
+ If UBound(parts)=1 Then b=CoordenadaCelula(parts(1))
+ If a(0)&lt;0 Or a(1)&lt;0 Or b(0)&lt;a(0) Or b(1)&lt;a(1) Or b(1)&gt;=t.Rows.Count Then GoTo FalhaSel
+ total=t.TableColumnRelativeSum
+ html="&lt;table border=""0"" cellspacing=""0"" cellpadding=""0""" &amp; Estilo("border-collapse: collapse; " &amp; Fundo(t)) &amp; "&gt;&lt;tbody&gt;"
+ For i=a(1) To b(1)
+  row=t.Rows.getByIndex(i):sep=row.TableColumnSeparators
+  If b(0)&gt;UBound(sep)+1 Then GoTo FalhaSel
+  leftEdge=0:rightEdge=total
+  If a(0)&gt;0 Then leftEdge=sep(a(0)-1).Position
+  If b(0)&lt;=UBound(sep) Then rightEdge=sep(b(0)).Position
+  If rightEdge&lt;=leftEdge Then GoTo FalhaSel
+  html=html &amp; "&lt;tr" &amp; Estilo(Fundo(row)) &amp; "&gt;"
+  For j=a(0) To b(0)
+   If j&gt;0 Then
+    If Not sep(j-1).IsVisible Then GoTo FalhaSel
+   End If
+   If j&lt;=UBound(sep) Then
+    If Not sep(j).IsVisible Then GoTo FalhaSel
+   End If
+   cell=t.getCellByName(NomeColuna(j) &amp; Numero(i+1))
+   If cell.RowSpan&lt;&gt;1 Then GoTo FalhaSel
+   first=0:last=total
+   If j&gt;0 Then first=sep(j-1).Position
+   If j&lt;=UBound(sep) Then last=sep(j).Position
+   css="width: " &amp; Numero((last-first)*100/(rightEdge-leftEdge)) &amp; "%; " &amp; Borda(cell.TopBorder,"top") &amp; Borda(cell.RightBorder,"right") &amp; Borda(cell.BottomBorder,"bottom") &amp; Borda(cell.LeftBorder,"left")
+   css=css &amp; "padding: " &amp; Pixels(cell.TopBorderDistance) &amp; " " &amp; Pixels(cell.RightBorderDistance) &amp; " " &amp; Pixels(cell.BottomBorderDistance) &amp; " " &amp; Pixels(cell.LeftBorderDistance) &amp; "; " &amp; Fundo(cell)
+   Select Case cell.VertOrient
+    Case 2:css=css &amp; "vertical-align: middle; "
+    Case 3:css=css &amp; "vertical-align: bottom; "
+    Case Else:css=css &amp; "vertical-align: top; "
+   End Select
+   Select Case cell.WritingMode
+    Case 1:css=css &amp; "direction: rtl; "
+    Case 2:css=css &amp; "writing-mode: vertical-rl; "
+    Case 3:css=css &amp; "writing-mode: vertical-lr; "
+   End Select
+   c=Blocos(cell):If PjeFailure&lt;&gt;"" Then Exit Function
+   If c(1)&lt;&gt;cell.String Then GoTo FalhaSel
+   If seen&gt;0 Then raw=raw &amp; Chr(10)
+   seen=seen+1:raw=raw &amp; c(1)
+   html=html &amp; "&lt;td" &amp; Estilo(css) &amp; "&gt;" &amp; c(0) &amp; "&lt;/td&gt;"
+  Next j
+  html=html &amp; "&lt;/tr&gt;"
+ Next i
+ TabelaSelecao=Array(html &amp; "&lt;/tbody&gt;&lt;/table&gt;",raw)
+ Exit Function
+FalhaSel:
+ PjeFailure="Seleção de células complexa ou não retangular. Selecione a tabela inteira para copiar sem omissões. " &amp; Error$
+End Function
+Function ComEstilosLista(fragment As String) As String
+ If PjeHier Then
+  ComEstilosLista="&lt;style type=""text/css""&gt;@supports (content: counters(list-item, &amp;quot;.&amp;quot;)) {li.pje-copy-hier::marker {content: counters(list-item, '.') '. ';} li.pje-copy-hier &gt; p &gt; span.pje-copy-label {display: none;} li.pje-copy-hier &gt; h1 &gt; span.pje-copy-label, li.pje-copy-hier &gt; h2 &gt; span.pje-copy-label, li.pje-copy-hier &gt; h3 &gt; span.pje-copy-label, li.pje-copy-hier &gt; h4 &gt; span.pje-copy-label, li.pje-copy-hier &gt; h5 &gt; span.pje-copy-label, li.pje-copy-hier &gt; h6 &gt; span.pje-copy-label {display: none;}}&lt;/style&gt;" &amp; fragment
+  ' Inside CSS raw text, entity references are not decoded.
+  ComEstilosLista=Replace(ComEstilosLista,"&amp;quot;.&amp;quot;","'.'",1,1)
+ Else
+  ComEstilosLista=fragment
+ End If
+End Function
+Function Converter(doc As Object) As Variant
+ PjeFailure="":PjeImages=0:PjeDoc=doc:PjeHier=False
+ Dim selection As Object,r As Object,tx As Object,c As Variant,expected As String,actual As String,fragment As String,full As Boolean
+ selection=doc.getCurrentSelection()
+ If HasUnoInterfaces(selection,"com.sun.star.text.XTextTableCursor") Then
+  c=TabelaSelecao(doc.CurrentController.ViewCursor.TextTable,selection.getRangeName()):If PjeFailure&lt;&gt;"" Then Exit Function
+  Converter=Array(ComEstilosLista(c(0)),c(1)):Exit Function
+ End If
+ If Not HasUnoInterfaces(selection,"com.sun.star.container.XIndexAccess") Then GoTo Unsupported
+ If selection.getCount()&lt;&gt;1 Then GoTo Unsupported
+ r=selection.getByIndex(0):tx=doc.Text
+ If Not HasUnoInterfaces(r,"com.sun.star.text.XTextRange") Then GoTo Unsupported
+ If Not EqualUnoObjects(r.getText(),tx) Then
+  If r.String&lt;&gt;"" Then
+   c=Blocos(r):If PjeFailure&lt;&gt;"" Then Exit Function
+   If c(1)&lt;&gt;r.String Then GoTo Unsupported
+   Converter=Array(ComEstilosLista(c(0)),c(1)):Exit Function
+  Else
+   GoTo Unsupported
+  End If
+ End If
+ If r.String="" Then
+  r=tx.createTextCursor():r.gotoStart(False):r.gotoEnd(True)
+ End If
+ expected=r.String
+ full=(tx.compareRegionStarts(r.getStart(),tx.getStart())=0 And tx.compareRegionEnds(r.getEnd(),tx.getEnd())=0)
+ c=Blocos(r)
+ If PjeFailure&lt;&gt;"" Then Exit Function
+ fragment=c(0):actual=c(1)
+ If expected="" And doc.GraphicObjects.Count=0 And doc.TextTables.Count=0 And InStr(fragment,"&lt;hr ")=0 Then
+  PjeFailure="Documento vazio.": Exit Function
+ End If
+ If actual&lt;&gt;expected Then
+  If expected=actual &amp; Chr(10) Then
+   actual=actual &amp; Chr(10):fragment=fragment &amp; Chr(10) &amp; "&lt;p&gt;&lt;br&gt;&lt;/p&gt;"
+  Else
+   PjeFailure="A conferência do texto não coincidiu. Cópia cancelada.":Exit Function
+  End If
+ End If
+ If full And PjeImages&lt;&gt;doc.GraphicObjects.Count Then
+  PjeFailure="Há imagens não ancoradas no texto que não puderam ser convertidas. Cópia cancelada.": Exit Function
+ End If
+ Converter=Array(ComEstilosLista(fragment),actual)
+ Exit Function
+Unsupported:
+ PjeFailure="Selecione texto contínuo no corpo da minuta. Seleções múltiplas descontínuas não são suportadas."
+End Function
+
+Function PJE_getTransferDataFlavors() As Variant
+ Dim f(2) As New com.sun.star.datatransfer.DataFlavor
+ f(0).MimeType="text/html":f(0).HumanPresentableName="HTML":f(0).DataType=CreateUnoValue("type","[]byte")
+ f(1).MimeType="text/plain;charset=utf-16":f(1).HumanPresentableName="Texto Unicode":f(1).DataType=CreateUnoValue("type","string")
+ f(2).MimeType="text/plain;charset=utf-8":f(2).HumanPresentableName="Texto UTF-8":f(2).DataType=CreateUnoValue("type","[]byte")
+ PJE_getTransferDataFlavors=f()
+End Function
+Function PJE_isDataFlavorSupported(f As Variant) As Boolean
+ PJE_isDataFlavorSupported=(LCase(f.MimeType)="text/html" Or LCase(f.MimeType)="text/plain;charset=utf-16" Or LCase(f.MimeType)="text/plain;charset=utf-8")
+End Function
+Function PJE_getTransferData(f As Variant) As Variant
+ If LCase(f.MimeType)="text/html" Then
+  PJE_getTransferData=CreateUnoValue("[]byte",PjeBytes)
+ ElseIf LCase(f.MimeType)="text/plain;charset=utf-8" Then
+  PJE_getTransferData=CreateUnoValue("[]byte",PjePlainBytes)
+ Else
+  PJE_getTransferData=PjePlain
+ End If
+End Function
+
+Function Diagnostico(doc As Object) As Variant
+ Dim v As Variant
+ v=Converter(doc)
+ If PjeFailure&lt;&gt;"" Then
+  Diagnostico=Array(PjeFailure, "")
+ Else
+  Diagnostico=v
+ End If
+End Function
+</script:module>

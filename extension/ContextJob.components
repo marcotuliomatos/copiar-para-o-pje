@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="UTF-8"?><components xmlns="http://openoffice.org/2010/uno-components"><component loader="com.sun.star.loader.Java2" uri="ContextJob.jar"><implementation name="local.pje.ContextJob"><service name="local.pje.ContextJob"/></implementation></component></components>

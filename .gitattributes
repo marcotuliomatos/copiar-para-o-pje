@@ -1,0 +1,8 @@
+* text=auto
+extension/** -text
+*.oxt binary
+*.jar binary
+*.png binary
+*.odt binary
+*.py text eol=lf
+*.md text eol=lf

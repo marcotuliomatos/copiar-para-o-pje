@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<description xmlns="http://openoffice.org/extensions/description/2006" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <identifier value="local.pje.copiar"/><version value="0.8.4"/><publisher><name lang="pt-BR" xlink:href="mailto:marco.matos@tjpi.jus.br">Marco Matos</name><name lang="en" xlink:href="mailto:marco.matos@tjpi.jus.br">Marco Matos</name></publisher>
+ <display-name><name lang="pt-BR">Copiar para o PJe</name><name lang="en">Copiar para o PJe</name></display-name>
+ <icon><default xlink:href="icons/pje48.png"/></icon>
+<extension-description><src lang="pt-BR" xlink:href="descricao-pt-BR.txt"/><src lang="en" xlink:href="description-en.txt"/></extension-description></description>

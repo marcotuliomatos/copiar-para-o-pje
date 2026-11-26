@@ -1,0 +1,23 @@
+Copia textos do LibreOffice Writer para o editor do PJe, preservando a formatação.
+
+Recursos suportados:
+
+• Alinhamentos e recuos proporcionais às medidas originais;
+• Negrito, itálico e sublinhado;
+• Cores de fonte e realce (marca-texto);
+• Sobrescrito e subscrito;
+• Listas numeradas e com marcadores, incluindo múltiplos níveis de sublistas;
+• Tabelas com células mescladas, dimensões, alinhamentos, bordas e cores de preenchimento;
+• Imagens incorporadas, com dimensionamento, posicionamento, margens, recorte e rotação;
+• Hyperlinks com abertura em nova aba;
+• Separadores horizontais.
+
+Facilidades de uso:
+
+• Botão integrado à barra de ferramentas;
+• Comando disponível no menu Editar e no menu de contexto;
+• Atalho de teclado personalizável (Ctrl+Shift+C por padrão);
+
+Processamento inteiramente local, sem envio de dados a servidores externos e sem necessidade de conexão com a internet.
+
+Encontrou um bug? Sentiu falta de algo? Entre em contato com marco.matos@tjpi.jus.br

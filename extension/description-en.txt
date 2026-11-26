@@ -1,0 +1,23 @@
+Copies text from LibreOffice Writer to the PJe editor, preserving formatting.
+
+Supported features:
+
+• Alignment and indentation proportional to the original measurements;
+• Bold, italics and underline;
+• Font colors and highlighting;
+• Superscript and subscript;
+• Numbered and bulleted lists, including multiple levels of nested lists;
+• Tables with merged cells, dimensions, alignment, borders and fill colors;
+• Embedded images, including sizing, positioning, margins, cropping and rotation;
+• Hyperlinks that open in a new tab;
+• Horizontal rules.
+
+Ease of use:
+
+• Integrated toolbar button;
+• Command available in the Edit and context menus;
+• Customizable keyboard shortcut (Ctrl+Shift+C by default);
+
+All processing is local, without sending data to external servers or requiring an internet connection.
+
+Found a bug? Missing a feature? Contact marco.matos@tjpi.jus.br
